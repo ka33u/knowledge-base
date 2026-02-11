@@ -2,53 +2,25 @@
   <div class="documents-page">
     <el-card shadow="never">
       <!-- 搜索和筛选 -->
-      <div class="search-bar">
-        <el-row :gutter="16">
-          <el-col :span="6" class="search-col">
-            <el-popover
-              placement="bottom-start"
-              :width="360"
-              trigger="click"
-              :visible="showHistory && searchHistory.length > 0"
+      <div class="search-section">
+        <el-row :gutter="16" class="search-row">
+          <el-col :span="6">
+            <el-input
+              v-model="searchQuery"
+              placeholder="搜索文档标题、内容、标签..."
+              clearable
+              @input="handleSearchInput"
+              @keyup.enter="handleSearch"
             >
-              <template #reference>
-                <el-input
-                  v-model="searchQuery"
-                  placeholder="搜索文档标题、内容、标签..."
-                  clearable
-                  @input="handleSearchInput"
-                  @keyup.enter="handleSearch"
-                  @focus="showHistory = searchQuery.length > 0"
-                  @blur="handleSearchBlur"
-                >
-                  <template #prefix>
-                    <el-icon><Search /></el-icon>
-                  </template>
-                  <template #append>
-                    <el-button @click="toggleAdvancedSearch">
-                      <el-icon><Filter /></el-icon>
-                    </el-button>
-                  </template>
-                </el-input>
+              <template #prefix>
+                <el-icon><Search /></el-icon>
               </template>
-              <!-- 搜索历史 -->
-              <div class="search-history">
-                <div class="history-header">
-                  <span>搜索历史</span>
-                  <el-button text size="small" @click="clearAllHistory">清空</el-button>
-                </div>
-                <div
-                  v-for="(item, index) in searchHistory"
-                  :key="index"
-                  class="history-item"
-                  @click="selectHistory(item)"
-                >
-                  <el-icon><Clock /></el-icon>
-                  <span class="history-text">{{ item }}</span>
-                  <el-icon class="delete-icon" @click.stop="deleteHistory(index)"><Close /></el-icon>
-                </div>
-              </div>
-            </el-popover>
+              <template #append>
+                <el-button @click="toggleAdvancedSearch">
+                  <el-icon><Filter /></el-icon>
+                </el-button>
+              </template>
+            </el-input>
           </el-col>
           <el-col :span="4">
             <el-select v-model="filterCategory" placeholder="选择分类" clearable @change="fetchDocuments">
@@ -80,7 +52,7 @@
         <el-collapse-transition>
           <div v-if="showAdvancedSearch" class="advanced-search">
             <el-row :gutter="16">
-              <el-col :span="6">
+              <el-col :span="8">
                 <span class="label">日期范围：</span>
                 <el-date-picker
                   v-model="dateRange"
@@ -108,13 +80,33 @@
           </div>
         </el-collapse-transition>
 
+        <!-- 搜索历史 -->
+        <div v-if="searchHistory.length > 0" class="search-history-bar">
+          <span class="history-label">
+            <el-icon><Clock /></el-icon>
+            搜索历史
+          </span>
+          <div class="history-tags">
+            <el-tag
+              v-for="(item, index) in searchHistory"
+              :key="index"
+              class="history-tag"
+              closable
+              @click="selectHistory(item)"
+              @close="deleteHistory(index)"
+            >
+              {{ item }}
+            </el-tag>
+          </div>
+          <el-button text size="small" @click="clearAllHistory" class="clear-btn">
+            清空
+          </el-button>
+        </div>
+
         <!-- 搜索结果提示 -->
         <div v-if="searchQuery && !loading" class="search-tip">
           <el-icon><InfoFilled /></el-icon>
           找到 <strong>{{ total }}</strong> 个相关文档
-          <span v-if="dateRange[0] && dateRange[1]">
-            ，日期范围：{{ dateRange[0] }} 至 {{ dateRange[1] }}
-          </span>
         </div>
       </div>
 
@@ -284,7 +276,6 @@ const filterCategory = ref('')
 const filterStatus = ref('')
 const dateRange = ref([])
 const showAdvancedSearch = ref(false)
-const showHistory = ref(false)
 const searchHistory = ref([])
 
 const reviewDialogVisible = ref(false)
@@ -411,26 +402,20 @@ const fetchCategories = async () => {
 
 let searchTimer = null
 
-// 输入时显示搜索历史
+// 输入时防抖搜索
 const handleSearchInput = () => {
-  showHistory.value = searchQuery.value.length > 0 && searchHistory.value.length > 0
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => {
     currentPage.value = 1
     fetchDocuments()
+    if (searchQuery.value.trim()) {
+      saveSearchHistory(searchQuery.value.trim())
+    }
   }, 500)
-}
-
-// 失焦时隐藏搜索历史
-const handleSearchBlur = () => {
-  setTimeout(() => {
-    showHistory.value = false
-  }, 200)
 }
 
 // 搜索（回车时执行）
 const handleSearch = () => {
-  showHistory.value = false
   currentPage.value = 1
   fetchDocuments()
   if (searchQuery.value.trim()) {
@@ -531,74 +516,66 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .documents-page {
-  .search-col {
-    position: relative;
-  }
-
-  .search-bar {
+  .search-section {
     margin-bottom: 20px;
   }
 
-  .search-history {
-    .history-header {
+  .search-row {
+    margin-bottom: 12px;
+  }
+
+  .search-history-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    background: #fafafa;
+    border-radius: 4px;
+    margin-top: 12px;
+
+    .history-label {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      padding-bottom: 8px;
-      border-bottom: 1px solid #ebeef5;
-      margin-bottom: 8px;
-      
-      span {
-        font-size: 13px;
-        color: #909399;
-        font-weight: 500;
+      font-size: 13px;
+      color: #909399;
+      margin-right: 12px;
+
+      .el-icon {
+        margin-right: 4px;
       }
     }
 
-    .history-item {
+    .history-tags {
+      flex: 1;
       display: flex;
-      align-items: center;
-      padding: 10px 12px;
-      cursor: pointer;
-      border-radius: 4px;
-      transition: all 0.2s;
+      flex-wrap: wrap;
+      gap: 8px;
 
-      &:hover {
-        background-color: #f5f7fa;
-
-        .delete-icon {
-          opacity: 1;
-        }
-      }
-
-      .el-icon {
-        margin-right: 10px;
-        color: #909399;
-      }
-
-      .history-text {
-        flex: 1;
-        color: #606266;
-        font-size: 14px;
-      }
-
-      .delete-icon {
-        opacity: 0;
-        color: #c0c4cc;
-        transition: all 0.2s;
+      .history-tag {
+        cursor: pointer;
 
         &:hover {
-          color: #f56c6c;
+          background-color: #ecf5ff;
+          color: #409eff;
         }
+      }
+    }
+
+    .clear-btn {
+      color: #909399;
+      font-size: 12px;
+
+      &:hover {
+        color: #409eff;
       }
     }
   }
 
   .advanced-search {
-    margin-top: 16px;
     padding: 16px;
     background: #f5f7fa;
     border-radius: 4px;
+    margin-bottom: 12px;
 
     .label {
       display: inline-block;
@@ -608,12 +585,12 @@ onMounted(() => {
   }
 
   .search-tip {
-    margin-top: 12px;
     padding: 8px 12px;
     background: #ecf5ff;
     border-radius: 4px;
     color: #409eff;
     font-size: 14px;
+    margin-bottom: 12px;
 
     .el-icon {
       margin-right: 6px;
