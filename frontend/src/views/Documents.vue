@@ -4,36 +4,51 @@
       <!-- 搜索和筛选 -->
       <div class="search-bar">
         <el-row :gutter="16">
-          <el-col :span="6">
-            <el-input
-              v-model="searchQuery"
-              placeholder="搜索文档标题、内容、标签..."
-              clearable
-              @input="handleSearch"
-              @keyup.enter="handleSearch"
+          <el-col :span="6" class="search-col">
+            <el-popover
+              placement="bottom-start"
+              :width="360"
+              trigger="click"
+              :visible="showHistory && searchHistory.length > 0"
             >
-              <template #prefix>
-                <el-icon><Search /></el-icon>
+              <template #reference>
+                <el-input
+                  v-model="searchQuery"
+                  placeholder="搜索文档标题、内容、标签..."
+                  clearable
+                  @input="handleSearchInput"
+                  @keyup.enter="handleSearch"
+                  @focus="showHistory = searchQuery.length > 0"
+                  @blur="handleSearchBlur"
+                >
+                  <template #prefix>
+                    <el-icon><Search /></el-icon>
+                  </template>
+                  <template #append>
+                    <el-button @click="toggleAdvancedSearch">
+                      <el-icon><Filter /></el-icon>
+                    </el-button>
+                  </template>
+                </el-input>
               </template>
-              <template #append>
-                <el-button @click="toggleAdvancedSearch">
-                  <el-icon><Filter /></el-icon>
-                </el-button>
-              </template>
-            </el-input>
-            <!-- 搜索历史 -->
-            <div v-if="searchHistory.length > 0 && showHistory" class="search-history">
-              <div
-                v-for="(item, index) in searchHistory"
-                :key="index"
-                class="history-item"
-                @click="selectHistory(item)"
-              >
-                <el-icon><Clock /></el-icon>
-                <span>{{ item }}</span>
-                <el-icon class="delete-icon" @click.stop="deleteHistory(index)"><Close /></el-icon>
+              <!-- 搜索历史 -->
+              <div class="search-history">
+                <div class="history-header">
+                  <span>搜索历史</span>
+                  <el-button text size="small" @click="clearAllHistory">清空</el-button>
+                </div>
+                <div
+                  v-for="(item, index) in searchHistory"
+                  :key="index"
+                  class="history-item"
+                  @click="selectHistory(item)"
+                >
+                  <el-icon><Clock /></el-icon>
+                  <span class="history-text">{{ item }}</span>
+                  <el-icon class="delete-icon" @click.stop="deleteHistory(index)"><Close /></el-icon>
+                </div>
               </div>
-            </div>
+            </el-popover>
           </el-col>
           <el-col :span="4">
             <el-select v-model="filterCategory" placeholder="选择分类" clearable @change="fetchDocuments">
@@ -317,10 +332,17 @@ const selectHistory = (query) => {
   fetchDocuments()
 }
 
-// 删除历史记录
+// 删除单条历史记录
 const deleteHistory = (index) => {
   searchHistory.value.splice(index, 1)
   localStorage.setItem('searchHistory', JSON.stringify(searchHistory.value))
+}
+
+// 清空所有历史
+const clearAllHistory = () => {
+  searchHistory.value = []
+  localStorage.removeItem('searchHistory')
+  showHistory.value = false
 }
 
 // 切换高级搜索
@@ -388,13 +410,32 @@ const fetchCategories = async () => {
 }
 
 let searchTimer = null
-const handleSearch = () => {
-  showHistory.value = searchQuery.value.length > 0
+
+// 输入时显示搜索历史
+const handleSearchInput = () => {
+  showHistory.value = searchQuery.value.length > 0 && searchHistory.value.length > 0
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => {
     currentPage.value = 1
     fetchDocuments()
   }, 500)
+}
+
+// 失焦时隐藏搜索历史
+const handleSearchBlur = () => {
+  setTimeout(() => {
+    showHistory.value = false
+  }, 200)
+}
+
+// 搜索（回车时执行）
+const handleSearch = () => {
+  showHistory.value = false
+  currentPage.value = 1
+  fetchDocuments()
+  if (searchQuery.value.trim()) {
+    saveSearchHistory(searchQuery.value.trim())
+  }
 }
 
 const viewDocument = (id) => {
@@ -490,55 +531,65 @@ onMounted(() => {
 
 <style scoped lang="scss">
 .documents-page {
-  .search-bar {
-    margin-bottom: 20px;
+  .search-col {
     position: relative;
   }
 
+  .search-bar {
+    margin-bottom: 20px;
+  }
+
   .search-history {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: #fff;
-    border: 1px solid #e4e7ed;
-    border-radius: 4px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
-    z-index: 100;
-    max-height: 300px;
-    overflow-y: auto;
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #ebeef5;
+      margin-bottom: 8px;
+      
+      span {
+        font-size: 13px;
+        color: #909399;
+        font-weight: 500;
+      }
+    }
 
     .history-item {
       display: flex;
       align-items: center;
-      padding: 10px 16px;
+      padding: 10px 12px;
       cursor: pointer;
-      transition: background-color 0.2s;
+      border-radius: 4px;
+      transition: all 0.2s;
 
       &:hover {
         background-color: #f5f7fa;
+
+        .delete-icon {
+          opacity: 1;
+        }
       }
 
       .el-icon {
-        margin-right: 8px;
+        margin-right: 10px;
         color: #909399;
       }
 
-      span {
+      .history-text {
         flex: 1;
+        color: #606266;
+        font-size: 14px;
       }
 
       .delete-icon {
         opacity: 0;
-        transition: opacity 0.2s;
+        color: #c0c4cc;
+        transition: all 0.2s;
 
         &:hover {
           color: #f56c6c;
         }
-      }
-
-      &:hover .delete-icon {
-        opacity: 1;
       }
     }
   }
