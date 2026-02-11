@@ -13,7 +13,7 @@ const { success, error, notFound } = require('../utils/response');
 exports.getDocuments = async (req, res, next) => {
   try {
     const { page, limit, skip, sort } = buildPagination(req.query);
-    const { q, category, status, author, tags } = req.query;
+    const { q, category, status, author, tags, dateFrom, dateTo } = req.query;
 
     // 构建查询条件
     const query = {};
@@ -31,9 +31,30 @@ exports.getDocuments = async (req, res, next) => {
       // 可以查看所有文档
     }
 
-    // 搜索关键词
-    if (q) {
-      query.$text = { $search: q };
+    // 搜索关键词 - 使用模糊匹配
+    if (q && q.trim().length > 0) {
+      const keywords = q.trim().split(/\s+/).filter(k => k.length > 0);
+      if (keywords.length === 1) {
+        // 单关键词：匹配任一字段
+        const keyword = keywords[0];
+        query.$or = [
+          { title: { $regex: keyword, $options: 'i' } },
+          { description: { $regex: keyword, $options: 'i' } },
+          { content: { $regex: keyword, $options: 'i' } },
+          { tags: { $in: [new RegExp(keyword, 'i')] } }
+        ];
+      } else {
+        // 多关键词：任一关键词匹配任一字段
+        const searchConditions = keywords.map(keyword => ({
+          $or: [
+            { title: { $regex: keyword, $options: 'i' } },
+            { description: { $regex: keyword, $options: 'i' } },
+            { content: { $regex: keyword, $options: 'i' } },
+            { tags: { $in: [new RegExp(keyword, 'i')] } }
+          ]
+        }));
+        query.$and = searchConditions;
+      }
     }
 
     // 分类筛选
@@ -57,17 +78,68 @@ exports.getDocuments = async (req, res, next) => {
       query.tags = { $in: tagArray };
     }
 
+    // 日期范围筛选
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) query.createdAt.$lte = new Date(dateTo);
+    }
+
     // 查询总数
     const total = await Document.countDocuments(query);
 
     // 查询文档列表
-    const documents = await Document.find(query)
+    let documents = await Document.find(query)
       .populate('author', 'username email avatar')
       .populate('reviewer', 'username email avatar')
       .populate('category', 'name color')
       .sort(sort)
       .skip(skip)
       .limit(limit);
+
+    // 处理高亮显示（如果有搜索词）
+    if (q && q.trim().length > 0) {
+      const keywords = q.trim().split(/\s+/).filter(k => k.length > 0);
+      documents = documents.map(doc => {
+        const docObj = doc.toObject();
+        
+        keywords.forEach(keyword => {
+          const lowerKeyword = keyword.toLowerCase();
+          
+          if (docObj.title?.toLowerCase().includes(lowerKeyword)) {
+            docObj.title = docObj.title.replace(
+              new RegExp(`(${keyword})`, 'gi'),
+              '<mark>$1</mark>'
+            );
+          }
+          
+          if (docObj.description?.toLowerCase().includes(lowerKeyword)) {
+            docObj.description = docObj.description.replace(
+              new RegExp(`(${keyword})`, 'gi'),
+              '<mark>$1</mark>'
+            );
+          }
+          
+          if (docObj.content?.toLowerCase().includes(lowerKeyword)) {
+            docObj.content = docObj.content.replace(
+              new RegExp(`(${keyword})`, 'gi'),
+              '<mark>$1</mark>'
+            );
+          }
+          
+          if (docObj.tags) {
+            docObj.tags = docObj.tags.map(tag => {
+              if (tag.toLowerCase().includes(lowerKeyword)) {
+                return tag.replace(new RegExp(`(${keyword})`, 'gi'), '<mark>$1</mark>');
+              }
+              return tag;
+            });
+          }
+        });
+
+        return docObj;
+      });
+    }
 
     return success(res, paginateResponse(total, page, limit, documents));
   } catch (err) {
@@ -367,7 +439,7 @@ exports.reviewDocument = async (req, res, next) => {
 };
 
 /**
- * 搜索文档 - 增强版
+ * 搜索文档 - 增强版（支持部分匹配）
  * @route GET /api/documents/search
  */
 exports.searchDocuments = async (req, res, next) => {
@@ -375,61 +447,113 @@ exports.searchDocuments = async (req, res, next) => {
     const { q, category, tags, dateFrom, dateTo, author } = req.query;
     const { page, limit, skip, sort } = buildPagination(req.query);
 
-    if (!q) {
+    if (!q || q.trim().length === 0) {
       return error(res, '请输入搜索关键词');
     }
 
-    // 构建查询条件
-    const query = {
-      $text: { $search: q },
-      isPublished: true // 只搜索已发布的文档
-    };
+    // 解析搜索关键词（支持多关键词，空格分隔）
+    const keywords = q.trim().split(/\s+/).filter(k => k.length > 0);
 
+    // 构建基础查询条件（只显示已发布的文档）
+    const baseQuery = { isPublished: true };
+
+    // 添加分类筛选
     if (category) {
-      query.category = category;
+      baseQuery.category = category;
     }
 
+    // 添加标签筛选
     if (tags) {
       const tagArray = Array.isArray(tags) ? tags : tags.split(',');
-      query.tags = { $in: tagArray };
+      baseQuery.tags = { $in: tagArray };
     }
 
-    // 日期范围筛选
+    // 添加日期范围筛选
     if (dateFrom || dateTo) {
-      query.createdAt = {};
-      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
-      if (dateTo) query.createdAt.$lte = new Date(dateTo);
+      baseQuery.createdAt = {};
+      if (dateFrom) baseQuery.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) baseQuery.createdAt.$lte = new Date(dateTo);
     }
 
-    // 作者筛选
+    // 添加作者筛选
     if (author) {
-      query.author = author;
+      baseQuery.author = author;
     }
+
+    // 构建搜索条件：使用OR匹配，任何字段包含任一关键词即可
+    const searchConditions = keywords.map(keyword => ({
+      $or: [
+        { title: { $regex: keyword, $options: 'i' } },
+        { description: { $regex: keyword, $options: 'i' } },
+        { content: { $regex: keyword, $options: 'i' } },
+        { tags: { $in: [new RegExp(keyword, 'i')] } }
+      ]
+    }));
+
+    // 合并查询条件
+    const query = searchConditions.length > 0
+      ? { ...baseQuery, $or: searchConditions }
+      : baseQuery;
 
     // 查询总数
     const total = await Document.countDocuments(query);
 
     // 查询文档列表
-    const documents = await Document.find(query, {
-      score: { $meta: 'textScore' }
-    })
+    const documents = await Document.find(query)
       .populate('author', 'username email avatar')
       .populate('category', 'name color')
-      .sort({ score: { $meta: 'textScore' }, ...sort })
+      .sort(sort)
       .skip(skip)
       .limit(limit);
 
     // 处理高亮显示
     const highlightedDocs = documents.map(doc => {
       const docObj = doc.toObject();
-      const highlightFields = ['title', 'description', 'content'];
-      const keywords = q.split(' ').filter(k => k);
-
-      highlightFields.forEach(field => {
-        if (docObj[field] && keywords.length > 0) {
-          keywords.forEach(keyword => {
-            const regex = new RegExp(`(${keyword})`, 'gi');
-            docObj[field] = docObj[field].replace(regex, '<mark>$1</mark>');
+      
+      // 添加匹配字段标记
+      docObj._matchedFields = [];
+      
+      keywords.forEach(keyword => {
+        const lowerKeyword = keyword.toLowerCase();
+        
+        // 检查并高亮标题
+        if (docObj.title && docObj.title.toLowerCase().includes(lowerKeyword)) {
+          docObj._matchedFields.push('title');
+          docObj.title = docObj.title.replace(
+            new RegExp(`(${keyword})`, 'gi'),
+            '<mark>$1</mark>'
+          );
+        }
+        
+        // 检查并高亮描述
+        if (docObj.description && docObj.description.toLowerCase().includes(lowerKeyword)) {
+          docObj._matchedFields.push('description');
+          docObj.description = docObj.description.replace(
+            new RegExp(`(${keyword})`, 'gi'),
+            '<mark>$1</mark>'
+          );
+        }
+        
+        // 检查并高亮内容（截取前500字）
+        if (docObj.content && docObj.content.toLowerCase().includes(lowerKeyword)) {
+          docObj._matchedFields.push('content');
+          docObj.content = docObj.content.replace(
+            new RegExp(`(${keyword})`, 'gi'),
+            '<mark>$1</mark>'
+          );
+        }
+        
+        // 检查并高亮标签
+        if (docObj.tags) {
+          docObj.tags = docObj.tags.map(tag => {
+            if (tag.toLowerCase().includes(lowerKeyword)) {
+              docObj._matchedFields.push('tags');
+              return tag.replace(
+                new RegExp(`(${keyword})`, 'gi'),
+                '<mark>$1</mark>'
+              );
+            }
+            return tag;
           });
         }
       });
@@ -437,7 +561,10 @@ exports.searchDocuments = async (req, res, next) => {
       return docObj;
     });
 
-    return success(res, paginateResponse(total, page, limit, highlightedDocs));
+    return success(res, {
+      ...paginateResponse(total, page, limit, highlightedDocs),
+      searchKeywords: keywords
+    });
   } catch (err) {
     next(err);
   }
