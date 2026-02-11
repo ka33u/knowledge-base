@@ -318,7 +318,6 @@ const saveSearchHistory = (query) => {
 // 选择历史搜索
 const selectHistory = (query) => {
   searchQuery.value = query
-  showHistory.value = false
   currentPage.value = 1
   fetchDocuments()
 }

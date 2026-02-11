@@ -34,18 +34,10 @@ exports.getDocuments = async (req, res, next) => {
     // 搜索关键词 - 使用模糊匹配
     if (q && q.trim().length > 0) {
       const keywords = q.trim().split(/\s+/).filter(k => k.length > 0);
-      if (keywords.length === 1) {
-        // 单关键词：匹配任一字段
-        const keyword = keywords[0];
-        query.$or = [
-          { title: { $regex: keyword, $options: 'i' } },
-          { description: { $regex: keyword, $options: 'i' } },
-          { content: { $regex: keyword, $options: 'i' } },
-          { tags: { $in: [new RegExp(keyword, 'i')] } }
-        ];
-      } else {
-        // 多关键词：任一关键词匹配任一字段
-        const searchConditions = keywords.map(keyword => ({
+      
+      // 多关键词：必须所有关键词都匹配（AND逻辑）
+      if (keywords.length > 1) {
+        const andConditions = keywords.map(keyword => ({
           $or: [
             { title: { $regex: keyword, $options: 'i' } },
             { description: { $regex: keyword, $options: 'i' } },
@@ -53,7 +45,16 @@ exports.getDocuments = async (req, res, next) => {
             { tags: { $in: [new RegExp(keyword, 'i')] } }
           ]
         }));
-        query.$and = searchConditions;
+        query.$and = andConditions;
+      } else if (keywords.length === 1) {
+        // 单关键词：任一字段匹配
+        const keyword = keywords[0];
+        query.$or = [
+          { title: { $regex: keyword, $options: 'i' } },
+          { description: { $regex: keyword, $options: 'i' } },
+          { content: { $regex: keyword, $options: 'i' } },
+          { tags: { $in: [new RegExp(keyword, 'i')] } }
+        ];
       }
     }
 
