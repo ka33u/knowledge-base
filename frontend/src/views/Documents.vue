@@ -7,14 +7,33 @@
           <el-col :span="6">
             <el-input
               v-model="searchQuery"
-              placeholder="搜索文档..."
+              placeholder="搜索文档标题、内容、标签..."
               clearable
               @input="handleSearch"
+              @keyup.enter="handleSearch"
             >
               <template #prefix>
                 <el-icon><Search /></el-icon>
               </template>
+              <template #append>
+                <el-button @click="toggleAdvancedSearch">
+                  <el-icon><Filter /></el-icon>
+                </el-button>
+              </template>
             </el-input>
+            <!-- 搜索历史 -->
+            <div v-if="searchHistory.length > 0 && showHistory" class="search-history">
+              <div
+                v-for="(item, index) in searchHistory"
+                :key="index"
+                class="history-item"
+                @click="selectHistory(item)"
+              >
+                <el-icon><Clock /></el-icon>
+                <span>{{ item }}</span>
+                <el-icon class="delete-icon" @click.stop="deleteHistory(index)"><Close /></el-icon>
+              </div>
+            </div>
           </el-col>
           <el-col :span="4">
             <el-select v-model="filterCategory" placeholder="选择分类" clearable @change="fetchDocuments">
@@ -41,6 +60,47 @@
             </el-button>
           </el-col>
         </el-row>
+
+        <!-- 高级搜索面板 -->
+        <el-collapse-transition>
+          <div v-if="showAdvancedSearch" class="advanced-search">
+            <el-row :gutter="16">
+              <el-col :span="6">
+                <span class="label">日期范围：</span>
+                <el-date-picker
+                  v-model="dateRange"
+                  type="daterange"
+                  range-separator="至"
+                  start-placeholder="开始日期"
+                  end-placeholder="结束日期"
+                  value-format="YYYY-MM-DD"
+                  @change="fetchDocuments"
+                />
+              </el-col>
+              <el-col :span="4">
+                <el-button type="primary" @click="fetchDocuments">
+                  <el-icon><Search /></el-icon>
+                  应用筛选
+                </el-button>
+              </el-col>
+              <el-col :span="4">
+                <el-button @click="clearFilters">
+                  <el-icon><Refresh /></el-icon>
+                  重置
+                </el-button>
+              </el-col>
+            </el-row>
+          </div>
+        </el-collapse-transition>
+
+        <!-- 搜索结果提示 -->
+        <div v-if="searchQuery && !loading" class="search-tip">
+          <el-icon><InfoFilled /></el-icon>
+          找到 <strong>{{ total }}</strong> 个相关文档
+          <span v-if="dateRange[0] && dateRange[1]">
+            ，日期范围：{{ dateRange[0] }} 至 {{ dateRange[1] }}
+          </span>
+        </div>
       </div>
 
       <!-- 文档列表 -->
@@ -48,8 +108,15 @@
         <el-table-column prop="title" label="标题" min-width="200">
           <template #default="{ row }">
             <el-link type="primary" @click="viewDocument(row._id)">
-              {{ row.title }}
+              <span v-html="row._highlight?.title || row.title"></span>
             </el-link>
+          </template>
+        </el-table-column>
+        <el-table-column prop="description" label="描述" min-width="200">
+          <template #default="{ row }">
+            <span v-if="row._highlight?.description" v-html="row._highlight.description"></span>
+            <span v-else-if="row.description" class="description-text">{{ row.description.substring(0, 100) }}...</span>
+            <span v-else class="no-description">无描述</span>
           </template>
         </el-table-column>
         <el-table-column prop="category.name" label="分类" width="120">
@@ -175,13 +242,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive } from 'vue'
+import { ref, onMounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useDocumentStore } from '@/stores/document'
 import { useCategoryStore } from '@/stores/category'
 import { documentApi } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search, Plus, Filter, Clock, Close, Refresh, InfoFilled } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 
 const router = useRouter()
@@ -199,6 +267,10 @@ const pageSize = ref(10)
 const searchQuery = ref('')
 const filterCategory = ref('')
 const filterStatus = ref('')
+const dateRange = ref([])
+const showAdvancedSearch = ref(false)
+const showHistory = ref(false)
+const searchHistory = ref([])
 
 const reviewDialogVisible = ref(false)
 const currentReviewDoc = ref(null)
@@ -207,6 +279,65 @@ const reviewForm = reactive({
   comment: ''
 })
 
+// 从localStorage加载搜索历史
+const loadSearchHistory = () => {
+  const history = localStorage.getItem('searchHistory')
+  if (history) {
+    searchHistory.value = JSON.parse(history)
+  }
+}
+
+// 保存搜索历史
+const saveSearchHistory = (query) => {
+  if (!query || query.trim().length < 2) return
+  
+  const history = [...searchHistory.value]
+  const index = history.indexOf(query)
+  
+  if (index > -1) {
+    history.splice(index, 1)
+  }
+  
+  history.unshift(query)
+  
+  // 最多保留10条
+  if (history.length > 10) {
+    history.pop()
+  }
+  
+  searchHistory.value = history
+  localStorage.setItem('searchHistory', JSON.stringify(history))
+}
+
+// 选择历史搜索
+const selectHistory = (query) => {
+  searchQuery.value = query
+  showHistory.value = false
+  currentPage.value = 1
+  fetchDocuments()
+}
+
+// 删除历史记录
+const deleteHistory = (index) => {
+  searchHistory.value.splice(index, 1)
+  localStorage.setItem('searchHistory', JSON.stringify(searchHistory.value))
+}
+
+// 切换高级搜索
+const toggleAdvancedSearch = () => {
+  showAdvancedSearch.value = !showAdvancedSearch.value
+}
+
+// 清空筛选
+const clearFilters = () => {
+  searchQuery.value = ''
+  filterCategory.value = ''
+  filterStatus.value = ''
+  dateRange.value = []
+  currentPage.value = 1
+  fetchDocuments()
+}
+
 const fetchDocuments = async () => {
   loading.value = true
   try {
@@ -214,9 +345,19 @@ const fetchDocuments = async () => {
       page: currentPage.value,
       limit: pageSize.value
     }
-    if (searchQuery.value) params.q = searchQuery.value
+    
+    if (searchQuery.value) {
+      params.q = searchQuery.value
+      // 保存搜索历史（防抖）
+      debouncedSaveHistory(searchQuery.value)
+    }
+    
     if (filterCategory.value) params.category = filterCategory.value
     if (filterStatus.value) params.status = filterStatus.value
+    if (dateRange.value && dateRange.value.length === 2) {
+      params.dateFrom = dateRange.value[0]
+      params.dateTo = dateRange.value[1]
+    }
 
     const res = await documentApi.getList(params)
     documents.value = res.data
@@ -226,6 +367,15 @@ const fetchDocuments = async () => {
   } finally {
     loading.value = false
   }
+}
+
+// 防抖保存搜索历史
+let historyTimer = null
+const debouncedSaveHistory = (query) => {
+  clearTimeout(historyTimer)
+  historyTimer = setTimeout(() => {
+    saveSearchHistory(query)
+  }, 1000)
 }
 
 const fetchCategories = async () => {
@@ -239,6 +389,7 @@ const fetchCategories = async () => {
 
 let searchTimer = null
 const handleSearch = () => {
+  showHistory.value = searchQuery.value.length > 0
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => {
     currentPage.value = 1
@@ -333,6 +484,7 @@ const formatDate = (date) => {
 onMounted(() => {
   fetchDocuments()
   fetchCategories()
+  loadSearchHistory()
 })
 </script>
 
@@ -340,12 +492,106 @@ onMounted(() => {
 .documents-page {
   .search-bar {
     margin-bottom: 20px;
+    position: relative;
+  }
+
+  .search-history {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border: 1px solid #e4e7ed;
+    border-radius: 4px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+    z-index: 100;
+    max-height: 300px;
+    overflow-y: auto;
+
+    .history-item {
+      display: flex;
+      align-items: center;
+      padding: 10px 16px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+
+      &:hover {
+        background-color: #f5f7fa;
+      }
+
+      .el-icon {
+        margin-right: 8px;
+        color: #909399;
+      }
+
+      span {
+        flex: 1;
+      }
+
+      .delete-icon {
+        opacity: 0;
+        transition: opacity 0.2s;
+
+        &:hover {
+          color: #f56c6c;
+        }
+      }
+
+      &:hover .delete-icon {
+        opacity: 1;
+      }
+    }
+  }
+
+  .advanced-search {
+    margin-top: 16px;
+    padding: 16px;
+    background: #f5f7fa;
+    border-radius: 4px;
+
+    .label {
+      display: inline-block;
+      margin-right: 8px;
+      color: #606266;
+    }
+  }
+
+  .search-tip {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: #ecf5ff;
+    border-radius: 4px;
+    color: #409eff;
+    font-size: 14px;
+
+    .el-icon {
+      margin-right: 6px;
+    }
   }
 
   .pagination {
     margin-top: 20px;
     display: flex;
     justify-content: flex-end;
+  }
+
+  // 搜索高亮样式
+  :deep(mark) {
+    background: #fde68a;
+    padding: 0 4px;
+    border-radius: 2px;
+    color: #d97706;
+    font-weight: bold;
+  }
+
+  .description-text {
+    color: #606266;
+    font-size: 13px;
+  }
+
+  .no-description {
+    color: #c0c4cc;
+    font-style: italic;
   }
 }
 </style>

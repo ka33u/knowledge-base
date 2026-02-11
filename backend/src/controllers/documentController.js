@@ -367,12 +367,12 @@ exports.reviewDocument = async (req, res, next) => {
 };
 
 /**
- * 搜索文档
+ * 搜索文档 - 增强版
  * @route GET /api/documents/search
  */
 exports.searchDocuments = async (req, res, next) => {
   try {
-    const { q, category, tags } = req.query;
+    const { q, category, tags, dateFrom, dateTo, author } = req.query;
     const { page, limit, skip, sort } = buildPagination(req.query);
 
     if (!q) {
@@ -394,18 +394,50 @@ exports.searchDocuments = async (req, res, next) => {
       query.tags = { $in: tagArray };
     }
 
+    // 日期范围筛选
+    if (dateFrom || dateTo) {
+      query.createdAt = {};
+      if (dateFrom) query.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) query.createdAt.$lte = new Date(dateTo);
+    }
+
+    // 作者筛选
+    if (author) {
+      query.author = author;
+    }
+
     // 查询总数
     const total = await Document.countDocuments(query);
 
     // 查询文档列表
-    const documents = await Document.find(query)
+    const documents = await Document.find(query, {
+      score: { $meta: 'textScore' }
+    })
       .populate('author', 'username email avatar')
       .populate('category', 'name color')
-      .sort(sort)
+      .sort({ score: { $meta: 'textScore' }, ...sort })
       .skip(skip)
       .limit(limit);
 
-    return success(res, paginateResponse(total, page, limit, documents));
+    // 处理高亮显示
+    const highlightedDocs = documents.map(doc => {
+      const docObj = doc.toObject();
+      const highlightFields = ['title', 'description', 'content'];
+      const keywords = q.split(' ').filter(k => k);
+
+      highlightFields.forEach(field => {
+        if (docObj[field] && keywords.length > 0) {
+          keywords.forEach(keyword => {
+            const regex = new RegExp(`(${keyword})`, 'gi');
+            docObj[field] = docObj[field].replace(regex, '<mark>$1</mark>');
+          });
+        }
+      });
+
+      return docObj;
+    });
+
+    return success(res, paginateResponse(total, page, limit, highlightedDocs));
   } catch (err) {
     next(err);
   }
